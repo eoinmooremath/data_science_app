@@ -1,0 +1,31 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Project Overview:
+"I'm building a Data Science UI that acts as a 'personal data scientist'. It's a Dash web application where users can chat with Claude to perform statistical analyses. The key feature is that while Claude orchestrates the analysis, all computations happen locally with real-time progress visualization. Users see live progress bars, interactive plots, and a results ledger - while Claude only receives statistical summaries, not the raw data/plots."
+Key Architecture Decisions:
+
+Modular architecture with clear separation:
+
+MCP tools for statistical operations
+Message bus for internal communication
+Job manager for async operations
+UI components (chat, progress, plots, results)
+
+
+Proven concepts from our tests:
+
+Progress tracking works using a shared queue/message system
+Plots are displayed locally while only descriptions go to Claude
+Jobs return immediately with IDs for real-time monitoring
+
+
+Tech stack:
+
+Dash for the web UI
+Anthropic API for Claude integration
+Pure Python IPC (no Redis) for easier deployment
+
+Plotly for interactive visualizations

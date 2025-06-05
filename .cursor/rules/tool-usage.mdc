@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+I want to have the model have access to a large number of statistical tools, by exposing individual functions with smart organization.
+
+Hierarchical Discovery - LLM can reason at different levels:
+
+"I need preprocessing" → explores preprocessing.*
+"I need to scale" → explores preprocessing.scale.*
+
+"I need robust scaling" → uses preprocessing.scale.RobustScaler
