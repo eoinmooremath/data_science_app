@@ -10,10 +10,10 @@ Provides hierarchical plotting tools using Plotly Express with:
 
 from .base import BasePlottingTool
 from .suggest import PlotSuggestionTool
-from .edit import PlotEditTool
+# from .edit import PlotEditTool # Temporarily disabled due to refactoring
 
 __all__ = [
     "BasePlottingTool",
     "PlotSuggestionTool",
-    "PlotEditTool"
+    # "PlotEditTool" # Temporarily disabled
 ] 

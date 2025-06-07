@@ -8,6 +8,7 @@ import time
 
 from core.models import ToolInput
 from tools.base import BaseTool
+from tools.data_tools import uploaded_datasets
 
 
 class DataGenerationInput(BaseModel):
@@ -39,13 +40,8 @@ class DataGenerationInput(BaseModel):
 class DataGenerationTool(BaseTool):
     """Generate synthetic datasets for visualization and analysis"""
     
-    @property
-    def name(self) -> str:
-        return "generate_data"
-    
-    @property
-    def description(self) -> str:
-        return """Generate synthetic datasets for visualization and analysis.
+    name = "generate_data"
+    description = """Generate synthetic datasets for visualization and analysis.
         
         Can create:
         - Scatter plot data with controllable correlation
@@ -55,10 +51,7 @@ class DataGenerationTool(BaseTool):
         - Correlated multi-variable datasets
         
         Perfect for testing visualizations, demonstrations, or when you need sample data."""
-    
-    @property
-    def input_model(self) -> type[ToolInput]:
-        return DataGenerationInput
+    input_model = DataGenerationInput
     
     @property
     def estimated_duration(self) -> float:
@@ -75,7 +68,7 @@ class DataGenerationTool(BaseTool):
             np.random.seed(inputs.random_seed)
         
         # Progress: Generate data
-        self.update_progress(job_id, 30, f"Generating {inputs.data_type} data...")
+        self.update_progress(job_id, 50, f"Generating {inputs.data_type} data...")
         
         try:
             if inputs.data_type == "scatter":
@@ -92,27 +85,17 @@ class DataGenerationTool(BaseTool):
                 # Default to scatter
                 df = self._generate_scatter_data(inputs)
             
-            # Progress: Finalizing
-            self.update_progress(job_id, 80, "Finalizing dataset...")
+            # Use the job_id as the unique dataset_id to prevent overwrites
+            dataset_id = job_id
+            uploaded_datasets[dataset_id] = df
             
-            # Store the generated data globally so plotting tools can access it
-            self._store_generated_data(df)
+            self.update_progress(job_id, 90, "Data stored.")
             
-            # Progress: Complete
-            self.update_progress(job_id, 100, "Data generation completed!")
+            # --- Create result summary ---
+            summary = self._create_summary(df, inputs)
+            summary["dataset_id"] = dataset_id # Return the new unique ID
             
-            return {
-                "data_type": inputs.data_type,
-                "n_points": len(df),
-                "columns": list(df.columns),
-                "data_summary": {
-                    "shape": df.shape,
-                    "numeric_columns": list(df.select_dtypes(include=[np.number]).columns),
-                    "categorical_columns": list(df.select_dtypes(include=['object', 'category']).columns),
-                    "sample_data": df.head().to_dict('records')
-                },
-                "message": f"Successfully generated {inputs.data_type} dataset with {len(df)} rows and {len(df.columns)} columns"
-            }
+            return summary
             
         except Exception as e:
             error_msg = f"Error generating data: {str(e)}"
@@ -240,6 +223,21 @@ class DataGenerationTool(BaseTool):
         })
         
         return df
+    
+    def _create_summary(self, df: pd.DataFrame, inputs: DataGenerationInput) -> Dict[str, Any]:
+        """Create a summary of the generated data"""
+        return {
+            "data_type": inputs.data_type,
+            "n_points": len(df),
+            "columns": list(df.columns),
+            "data_summary": {
+                "shape": df.shape,
+                "numeric_columns": list(df.select_dtypes(include=[np.number]).columns),
+                "categorical_columns": list(df.select_dtypes(include=['object', 'category']).columns),
+                "sample_data": df.head().to_dict('records')
+            },
+            "message": f"Successfully generated {inputs.data_type} dataset with {len(df)} rows and {len(df.columns)} columns"
+        }
     
     def _store_generated_data(self, df: pd.DataFrame):
         """Store generated data so plotting tools can access it"""

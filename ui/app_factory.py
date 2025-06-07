@@ -24,72 +24,56 @@ THEMES = {
     "LUX": dbc.themes.LUX,
     "MATERIA": dbc.themes.MATERIA,
     "MINTY": dbc.themes.MINTY,
-    "MORPH": dbc.themes.MORPH,
     "PULSE": dbc.themes.PULSE,
-    "QUARTZ": dbc.themes.QUARTZ,
     "SANDSTONE": dbc.themes.SANDSTONE,
     "SIMPLEX": dbc.themes.SIMPLEX,
     "SKETCHY": dbc.themes.SKETCHY,
-    "SLATE": dbc.themes.SLATE,
-    "SOLAR": dbc.themes.SOLAR,
     "SPACELAB": dbc.themes.SPACELAB,
-    "SUPERHERO": dbc.themes.SUPERHERO,
     "UNITED": dbc.themes.UNITED,
-    "VAPOR": dbc.themes.VAPOR,
-    "YETI": dbc.themes.YETI,
-    "ZEPHYR": dbc.themes.ZEPHYR
+    "YETI": dbc.themes.YETI
 }
 
+
 def create_app(server: Optional[Flask] = None) -> Dash:
-    """Factory function to create the Dash application"""
+    """Create and configure the Dash application"""
+    
+    # Get theme
+    theme_name = AppConfig.theme.upper()
+    theme = THEMES.get(theme_name, dbc.themes.BOOTSTRAP)
     
     # Create Dash app
     app = Dash(
         __name__,
         server=server,
-        external_stylesheets=[THEMES.get(AppConfig.theme, dbc.themes.BOOTSTRAP)],
-        title=AppConfig.app_title,
-        update_title="Loading...",
-        suppress_callback_exceptions=True
+        external_stylesheets=[theme],
+        suppress_callback_exceptions=True,
+        title="Data Science UI"
     )
     
     # Initialize core components
     message_bus = MessageBus()
-    message_bus.start()
-    
     job_manager = JobManager(message_bus)
     
-    # Initialize tools
-    tools = create_all_tools(job_manager, message_bus)
+    # Create LLM client first, which now instantiates the LLM
+    llm_client = LLMClient(job_manager, message_bus)
     
-    # Initialize LLM client if API key is available
-    llm_client = None
-    if AppConfig.anthropic_api_key:
-        llm_client = LLMClient(job_manager, tools)
-        print("✓ LLM client initialized")
-    else:
-        print("⚠️  No ANTHROPIC_API_KEY found. Running without LLM support.")
+    # Create tools dictionary, passing the now-available LLM to the creator
+    tools = create_all_tools(job_manager, message_bus, llm=llm_client.llm)
     
-    # Initialize UI state
-    ui_state = UIStateManager()
+    # Register all tools with the client
+    llm_client.register_tools(tools)
     
-    # Create layout
+    # Store references in app config for callbacks
+    app.llm_client = llm_client
+    app.job_manager = job_manager
+    app.message_bus = message_bus
+    app.ui_state = UIStateManager()
+    
+    # Set layout
     app.layout = create_main_layout()
     
-    # Register all callbacks
-    register_all_callbacks(
-        app=app,
-        message_bus=message_bus,
-        job_manager=job_manager,
-        llm_client=llm_client,
-        ui_state=ui_state,
-        tools=tools
-    )
+    # Register callbacks
+    register_all_callbacks(app, message_bus, job_manager, llm_client, app.ui_state, list(tools.values()))
     
-    # Store components in app for access
-    app.message_bus = message_bus
-    app.job_manager = job_manager
-    app.llm_client = llm_client
-    app.ui_state = ui_state
-    
+    print("✓ Dash app created and configured")
     return app

@@ -8,27 +8,17 @@ from core.message_bus import MessageBus
 class BaseTool(ABC):
     """Base class for all analysis tools"""
     
-    def __init__(self, job_manager: JobManager, message_bus: MessageBus):
+    # --- Refactored Attributes ---
+    # These are now class attributes, not properties.
+    # Subclasses should override these directly.
+    name: str = "base_tool"
+    description: str = "A base tool and should not be used directly."
+    input_model: Optional[type[ToolInput]] = None
+    
+    # --- Existing __init__ ---
+    def __init__(self, job_manager: JobManager, message_bus: MessageBus, **kwargs):
         self.job_manager = job_manager
         self.message_bus = message_bus
-    
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Tool name for Claude"""
-        pass
-    
-    @property
-    @abstractmethod
-    def description(self) -> str:
-        """Tool description for Claude"""
-        pass
-    
-    @property
-    @abstractmethod
-    def input_model(self) -> type[ToolInput]:
-        """Pydantic model for input validation"""
-        pass
     
     @property
     def estimated_duration(self) -> float:
@@ -115,11 +105,9 @@ class EnhancedBaseTool(BaseTool):
     - etc.
     """
     
-    @property
-    @abstractmethod
-    def namespace(self) -> str:
-        """Full namespace path (e.g., 'stats.descriptive.summary')"""
-        pass
+    # --- Refactored Namespace ---
+    # This is now a class attribute to be overridden by subclasses.
+    namespace: str = "base.enhanced"
     
     @property
     def category(self) -> str:

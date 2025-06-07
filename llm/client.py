@@ -1,116 +1,215 @@
-from typing import List, Dict, Any, Optional
-from anthropic import Anthropic
 import os
-from core.models import Job
+import asyncio
+from typing import Dict, Any, List, Optional, Callable
+from datetime import datetime
+import queue
+import threading
+from langchain_anthropic import ChatAnthropic
+import logging
+
+from llm.langchain_agent import create_langchain_agent, DataScienceAgent
 from core.job_manager import JobManager
-from tools.base import BaseTool
-from prompts import get_system_prompt, get_tool_context, get_conversation_guidelines
-from prompts.response_templates import ResponseTemplates
-import json
+from core.message_bus import MessageBus, Message, MessageType
+
 
 class LLMClient:
-    """Enhanced client for conversational interactions"""
+    """LangChain-powered LLM client for data science operations"""
     
-    def __init__(self, job_manager: JobManager, tools: List[BaseTool]):
-        self.anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    def __init__(self, job_manager: JobManager, message_bus: MessageBus):
         self.job_manager = job_manager
-        self.tools = {tool.name: tool for tool in tools}
-        self.tools_schema = [tool.get_schema() for tool in tools]
-        self.templates = ResponseTemplates()
+        self.message_bus = message_bus
         
-        # Build enhanced system prompt
-        self.system_prompt = f"""{get_system_prompt()}
-
-{get_tool_context(tools)}
-
-{get_conversation_guidelines()}
-
-Always be helpful, educational, and suggest next steps based on the results."""
+        # Instantiate the LLM here, making it available immediately
+        self.llm = ChatAnthropic(
+            model="claude-3-5-sonnet-20240620",
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            temperature=0.1,
+            max_tokens=4000
+        )
+        
+        self.agent: Optional[DataScienceAgent] = None
+        self.tools: Dict[str, Any] = {}
+        self.request_thread = None
+        self.message_queue = queue.Queue()
+        self.stop_event = threading.Event()
+        
+        print("✓ LangChain LLM client initialized")
     
-    def process_message(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Process a message with enhanced context"""
+    def start(self):
+        """Start the background processing thread after the app is configured."""
+        if not self.request_thread:
+            self._start_processing_thread()
+            logging.info("LLMClient background thread started.")
+    
+    def register_tools(self, tools: Dict[str, Any]):
+        """Register tools with the LangChain agent"""
+        self.tools = tools
+        
+        # Create the LangChain agent with all tools, passing the llm
+        self.agent = create_langchain_agent(
+            job_manager=self.job_manager,
+            message_bus=self.message_bus,
+            tools_registry=self.tools,
+            llm=self.llm
+        )
+        
+        print(f"🤖 LangChain agent created with {len(self.tools)} tools")
+    
+    def _start_processing_thread(self):
+        """Start the background thread that processes messages from the queue."""
+        self.request_thread = threading.Thread(
+            target=self.process_request_thread,
+            daemon=True
+        )
+        self.request_thread.start()
+
+    def process_request_thread(self):
+        """The target function for the background processing thread."""
+        while not self.stop_event.is_set():
+            try:
+                # Wait for a message to appear in the queue
+                message, user_id, job_id = self.message_queue.get(timeout=1)
+                
+                print(f"🧵 Dequeued message for job {job_id}: '{message[:50]}...'")
+                
+                # Use a synchronous-friendly method to call the async agent
+                result = self.process_message_sync(message, user_id)
+                
+                # Use the message bus to notify that the job is done
+                self.message_bus.publish(
+                    MessageType.JOB_STATUS,
+                    job_id=job_id,
+                    data={"status": "completed", "result": result}
+                )
+                self.message_queue.task_done()
+
+            except queue.Empty:
+                # This is expected when the queue is empty
+                continue
+            except Exception as e:
+                logging.error(f"❌ Error in LLM processing thread: {e}", exc_info=True)
+                # Optionally, publish an error status
+                if 'job_id' in locals():
+                    self.message_bus.publish(
+                        MessageType.JOB_STATUS,
+                        job_id=job_id,
+                        data={"status": "failed", "error": str(e)}
+                    )
+
+    async def process_message(self, message: str, user_id: str = "default", job_id_callback: Optional[Callable] = None) -> Dict[str, Any]:
+        """Process a user message through the LangChain agent"""
+        if not self.agent:
+            return {
+                "response": "❌ Agent not initialized. Please register tools first.",
+                "success": False,
+                "error": "Agent not initialized"
+            }
         
         try:
-            # Call Claude with enhanced context - system prompt goes as separate parameter
-            response = self.anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1024,
-                temperature=0.3,  # Slightly more creative
-                system=self.system_prompt,  # System prompt as separate parameter
-                messages=messages,
-                tools=self.tools_schema
-            )
+            print(f"🎯 Processing message via LangChain: {message[:100]}...")
             
-            # Process response...
-            if response.stop_reason == "tool_use":
-                # Get the full response text AND all tool uses
-                response_text = ""
-                tool_uses = []
-                
-                for block in response.content:
-                    if hasattr(block, 'text'):
-                        response_text = block.text
-                    elif hasattr(block, 'name'):
-                        tool_uses.append(block)
-                
-                if tool_uses:
-                    # Handle multiple tool calls
-                    job_ids = []
-                    tool_names = []
-                    
-                    for tool_use in tool_uses:
-                        tool = self.tools.get(tool_use.name)
-                        if tool:
-                            try:
-                                job = self.job_manager.create_job(tool_use.name)
-                                tool.execute_async(job, tool_use.input)
-                                job_ids.append(job.id)
-                                tool_names.append(tool_use.name)
-                            except Exception as e:
-                                return {
-                                    "type": "error",
-                                    "message": f"I encountered an error while trying to run {tool_use.name}: {str(e)}. Let me try a different approach."
-                                }
-                    
-                    # Create response message for multiple tools
-                    if len(job_ids) == 1:
-                        # Single tool call
-                        full_message = response_text
-                        if full_message:
-                            full_message += f"\n\n*(Job ID: {job_ids[0]})*"
-                        else:
-                            full_message = f"Starting {tool_names[0]} analysis (Job ID: {job_ids[0]})"
-                        
-                        return {
-                            "type": "tool_use",
-                            "job_id": job_ids[0],
-                            "tool_name": tool_names[0],
-                            "message": full_message
-                        }
-                    else:
-                        # Multiple tool calls
-                        job_list = ", ".join([f"{name} ({job_id})" for name, job_id in zip(tool_names, job_ids)])
-                        full_message = response_text
-                        if full_message:
-                            full_message += f"\n\n*Running: {job_list}*"
-                        else:
-                            full_message = f"Running multiple analyses: {job_list}"
-                        
-                        return {
-                            "type": "tool_use_multiple",
-                            "job_ids": job_ids,
-                            "tool_names": tool_names,
-                            "message": full_message
-                        }
+            # This is a bit of a placeholder; in a real scenario, the agent would create jobs.
+            # For now, we'll just create a dummy job to track the LLM call.
+            job = self.job_manager.create_job(tool_name="langchain_agent")
+            if job_id_callback:
+                job_id_callback(job.id)
+
+            # Process through LangChain agent
+            result = await self.agent.process_message(message, user_id)
             
-            # Regular response
-            return {
-                "type": "message",
-                "message": response.content[0].text if response.content else "I'm not sure how to respond to that."
-            }
+            self.job_manager.complete_job(job.id, result)
+
+            print(f"✅ LangChain processing complete: {result.get('success', False)}")
+            return result
             
         except Exception as e:
+            print(f"❌ LangChain client error: {str(e)}")
+            if 'job' in locals() and job:
+                self.job_manager.fail_job(job.id, str(e))
             return {
-                "type": "error",
-                "message": f"I'm having trouble processing that request. Could you try rephrasing it? (Error: {str(e)})"
+                "response": f"I encountered an error processing your request: {str(e)}",
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
             }
+    
+    def process_message_sync(self, message: str, user_id: str = "default", job_id_callback: Optional[Callable] = None) -> Dict[str, Any]:
+        """Synchronous wrapper for async message processing"""
+        try:
+            # Get or create event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(self._run_in_new_loop, message, user_id, job_id_callback)
+                        return future.result(timeout=120)
+                else:
+                    return loop.run_until_complete(self.process_message(message, user_id, job_id_callback))
+            except RuntimeError:
+                return asyncio.run(self.process_message(message, user_id, job_id_callback))
+                
+        except Exception as e:
+            print(f"❌ Sync wrapper error: {str(e)}")
+            return {
+                "response": f"I encountered an error: {str(e)}",
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def _run_in_new_loop(self, message: str, user_id: str, job_id_callback: Optional[Callable]) -> Dict[str, Any]:
+        """Run async code in a new event loop (for thread execution)"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(self.process_message(message, user_id, job_id_callback))
+        finally:
+            loop.close()
+
+    def process_message_in_background(self, message: str, user_id: str, job_id: str):
+        """Queue a message for the agent to process in the background."""
+        self.message_queue.put((message, user_id, job_id))
+
+    def stop(self):
+        """Stop the background processing thread."""
+        self.stop_event.set()
+        if self.request_thread:
+            self.request_thread.join()
+    
+    def clear_conversation_history(self):
+        """Clear the agent's conversation memory"""
+        if self.agent:
+            self.agent.clear_memory()
+            print("🧹 Conversation history cleared")
+    
+    def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get the current conversation history"""
+        if not self.agent:
+            return []
+        
+        messages = self.agent.get_conversation_history()
+        return [
+            {
+                "role": "human" if msg.type == "human" else "assistant",
+                "content": msg.content,
+                "timestamp": getattr(msg, 'timestamp', None)
+            }
+            for msg in messages
+        ]
+    
+    def get_available_tools(self) -> List[str]:
+        """Get list of available tool names"""
+        return list(self.tools.keys())
+    
+    def get_tool_info(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """Get information about a specific tool"""
+        if tool_name not in self.tools:
+            return None
+        
+        tool = self.tools[tool_name]
+        return {
+            "name": tool_name,
+            "description": getattr(tool, 'description', 'No description available'),
+            "doc": getattr(tool, '__doc__', None)
+        }

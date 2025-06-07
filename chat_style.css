@@ -1,0 +1,54 @@
+
+.sidebar {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.main_content {
+    padding: 1rem;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.conversation_table {
+    height: 400px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    margin-bottom: 1rem;
+}
+
+.user_message {
+    background-color: #e3f2fd;
+    text-align: right;
+}
+
+.ai_message {
+    background-color: #f1f8e9;
+    text-align: left;
+}
+
+.input_section {
+    margin-top: 1rem;
+}
+
+.results_section {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #dee2e6;
+}
+
+.status_text {
+    font-size: 0.9em;
+    color: #6c757d;
+}
+
+.logo-text {
+    margin-bottom: 1rem;
+}
+
+.fullwidth {
+    width: 100%;
+    margin-bottom: 0.5rem;
+}

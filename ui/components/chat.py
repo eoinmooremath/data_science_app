@@ -6,7 +6,22 @@ from ui.state import ChatMessage
 def create_chat_component(chat_id: str = "chat"):
     """Create the chat interface component"""
     return dbc.Card([
-        dbc.CardHeader("Data Science Assistant"),
+        dbc.CardHeader(
+            dbc.Row([
+                dbc.Col("Data Science Assistant", width="auto"),
+                dbc.Col(
+                    dbc.Button(
+                        "Clear Chat",
+                        id=f"{chat_id}-clear-btn",
+                        size="sm",
+                        color="secondary",
+                        outline=True,
+                    ),
+                    width="auto",
+                    className="ms-auto",
+                ),
+            ], justify="between", align="center")
+        ),
         dbc.CardBody([
             html.Div(
                 id=f"{chat_id}-history",

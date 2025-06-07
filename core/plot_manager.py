@@ -13,6 +13,18 @@ class GlobalPlotManager:
         """Set the plot history manager (called by the app)"""
         self._plot_history_manager = plot_history_manager
     
+    def add_new_plot(self, plot_id: str, figure: Dict[str, Any], title: str):
+        """Add a new plot to the history"""
+        if self._plot_history_manager:
+            plot_data = {
+                "title": title,
+                "figure": go.Figure(figure)
+            }
+            self._plot_history_manager.add_plot(plot_data, plot_id)
+            print(f"✅ Plot for job '{plot_id}' added to history.")
+        else:
+            print("⚠️ Plot history manager not available. Plot not added.")
+    
     def get_latest_plot(self) -> Tuple[Optional[go.Figure], Optional[Dict[str, Any]]]:
         """Get the most recent plot"""
         if not self._plot_history_manager:

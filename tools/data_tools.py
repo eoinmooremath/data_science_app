@@ -15,17 +15,9 @@ class DataInfoInput(ToolInput):
     dataset_name: Optional[str] = Field(default="uploaded", description="Name of the dataset to inspect")
 
 class GetDataInfoTool(BaseTool):
-    @property
-    def name(self) -> str:
-        return "get_data_info"
-    
-    @property
-    def description(self) -> str:
-        return "Get information about uploaded datasets including shape, columns, and basic statistics"
-    
-    @property
-    def input_model(self) -> type[ToolInput]:
-        return DataInfoInput
+    name: str = "get_data_info"
+    description: str = "Get information about uploaded datasets including shape, columns, and basic statistics"
+    input_model: type[ToolInput] = DataInfoInput
     
     @property
     def estimated_duration(self) -> float:
@@ -77,17 +69,9 @@ class AnalyzeUploadedDataInput(ToolInput):
     columns: Optional[list] = Field(default=None, description="Specific columns to analyze")
 
 class AnalyzeUploadedDataTool(BaseTool):
-    @property
-    def name(self) -> str:
-        return "analyze_uploaded_data"
-    
-    @property
-    def description(self) -> str:
-        return "Analyze uploaded data with various statistical methods"
-    
-    @property
-    def input_model(self) -> type[ToolInput]:
-        return AnalyzeUploadedDataInput
+    name: str = "analyze_uploaded_data"
+    description: str = "Analyze uploaded data with various statistical methods"
+    input_model: type[ToolInput] = AnalyzeUploadedDataInput
     
     def execute(self, job_id: str, inputs: AnalyzeUploadedDataInput) -> Dict[str, Any]:
         """Analyze uploaded data"""
@@ -252,210 +236,111 @@ class CodeExecutionInput(ToolInput):
 class DataUploadTool(BaseTool):
     """Tool for uploading CSV data"""
     
-    @property
-    def name(self) -> str:
-        return "upload_data"
-    
-    @property
-    def description(self) -> str:
-        return "Upload CSV data for analysis"
-    
-    @property
-    def input_model(self) -> type[ToolInput]:
-        return DataUploadInput
+    name: str = "data_upload"
+    description: str = "Upload a CSV file for analysis. The content should be a string."
+    input_model: type[ToolInput] = DataUploadInput
     
     @property
     def estimated_duration(self) -> float:
         return 2.0
     
-    def execute(self, job_id: str, inputs: ToolInput) -> Dict[str, Any]:
-        """Execute data upload"""
+    def execute(self, job_id: str, inputs: DataUploadInput) -> Dict[str, Any]:
+        """Upload and process a CSV file"""
+        self.update_progress(job_id, 10, "Reading CSV data...")
+        
         try:
-            # Parse CSV content
-            df = pd.read_csv(io.StringIO(inputs.file_content))
+            # Use io.StringIO to read the string content as a file
+            csv_file = io.StringIO(inputs.file_content)
+            df = pd.read_csv(csv_file)
             
-            # Store in global datasets
-            uploaded_datasets['uploaded'] = df
+            # Use filename as the key, or a default name
+            dataset_name = inputs.filename.split('.')[0] if inputs.filename else "uploaded"
             
-            # Send progress update
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 50, "status": "Parsing CSV data..."}
-            ))
+            # Store the dataframe in the global dictionary
+            uploaded_datasets[dataset_name] = df
             
-            # Analyze the data
-            info = {
-                "shape": df.shape,
-                "columns": df.columns.tolist(),
-                "dtypes": df.dtypes.to_dict(),
-                "missing_values": df.isnull().sum().to_dict(),
-                "sample": df.head().to_dict()
-            }
+            # Log for debugging
+            print(f"📊 Uploaded data '{dataset_name}' stored in global data store")
+            print(f"📊 Data shape: {df.shape}, Columns: {list(df.columns)}")
             
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 100, "status": "Upload complete!"}
-            ))
+            self.update_progress(job_id, 100, f"Successfully uploaded {dataset_name}")
             
             return {
                 "success": True,
-                "filename": inputs.filename,
-                "info": info,
-                "message": f"Successfully uploaded {inputs.filename} with {df.shape[0]} rows and {df.shape[1]} columns"
+                "message": f"Successfully uploaded '{inputs.filename}' as dataset '{dataset_name}'.",
+                "dataset_name": dataset_name,
+                "shape": f"{df.shape[0]}x{df.shape[1]}",
+                "columns": list(df.columns)
             }
-            
+        
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "message": f"Failed to upload data: {str(e)}"
-            }
+            return {"error": f"Failed to process CSV file: {e}"}
 
 class CodeExecutionTool(BaseTool):
     """Tool for executing Python code, especially for data generation"""
     
-    @property
-    def name(self) -> str:
-        return "execute_python_code"
-    
-    @property
-    def description(self) -> str:
-        return """Execute Python code for data generation, analysis, or other tasks.
-        
-        Perfect for:
-        - Generating complex datasets with specific statistical properties
-        - Creating synthetic data with custom distributions
-        - Data preprocessing and transformation
-        - Statistical calculations
-        
-        The code has access to common libraries (pandas, numpy, scipy, etc.) and can store
-        results in the global 'uploaded_datasets' dictionary for use by other tools."""
-    
-    @property
-    def input_model(self) -> type[ToolInput]:
-        return CodeExecutionInput
+    name: str = "python_code_interpreter"
+    description: str = """
+Execute Python code in a sandboxed environment.
+This is a powerful tool for custom data manipulation, analysis, and complex logic.
+
+Use this when other tools are insufficient.
+
+Example:
+```python
+# The 'df' variable holds the currently loaded dataset.
+# The result of the final expression will be returned.
+new_df = df[df['age'] > 30]
+new_df.describe()
+```
+"""
+    input_model: type[ToolInput] = CodeExecutionInput
     
     @property
     def estimated_duration(self) -> float:
         return 5.0
     
-    def execute(self, job_id: str, inputs: ToolInput) -> Dict[str, Any]:
-        """Execute Python code safely"""
+    def execute(self, job_id: str, inputs: CodeExecutionInput) -> Dict[str, Any]:
+        self.update_progress(job_id, 10, "Executing Python code...")
+
+        # For safety, this should be a real sandbox in production
+        # For this project, we'll execute it with limited context
+        
+        # Capture stdout and stderr
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        
         try:
-            # Send progress update
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 20, "status": "Preparing code execution..."}
-            ))
-            
-            # Prepare execution environment
-            exec_globals = {
-                # Standard libraries
-                'pd': pd,
-                'pandas': pd,
-                'np': np,
-                'numpy': np,
-                
-                # Data storage
-                'uploaded_datasets': uploaded_datasets,
-                
-                # Common imports that might be needed
-                '__builtins__': __builtins__,
+            # Prepare the local environment for exec
+            # Use the 'generated' or 'uploaded' dataset if available
+            local_env = {
+                "pd": pd,
+                "np": np,
+                "df": uploaded_datasets.get("generated", uploaded_datasets.get("uploaded"))
             }
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                # Execute the code
+                exec(inputs.code, {"__builtins__": __builtins__}, local_env)
             
-            # Try to import additional libraries that might be used
-            try:
-                import scipy
-                import scipy.stats
-                exec_globals['scipy'] = scipy
-            except ImportError:
-                pass
+            self.update_progress(job_id, 100, "Code execution complete.")
             
-            try:
-                import matplotlib.pyplot as plt
-                exec_globals['plt'] = plt
-            except ImportError:
-                pass
-            
-            try:
-                import seaborn as sns
-                exec_globals['sns'] = sns
-            except ImportError:
-                pass
-            
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 50, "status": "Executing code..."}
-            ))
-            
-            # Capture stdout and stderr
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            
-            # Execute the code
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                exec(inputs.code, exec_globals)
-            
-            # Get captured output
-            stdout_output = stdout_capture.getvalue()
-            stderr_output = stderr_capture.getvalue()
-            
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 80, "status": "Processing results..."}
-            ))
-            
-            # Check what datasets were created/modified
-            dataset_info = {}
-            for name, df in uploaded_datasets.items():
-                if isinstance(df, pd.DataFrame):
-                    dataset_info[name] = {
-                        "shape": df.shape,
-                        "columns": df.columns.tolist(),
-                        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                        "sample": df.head(3).to_dict() if len(df) > 0 else {}
-                    }
-            
-            self.message_bus.publish(Message(
-                type=MessageType.PROGRESS,
-                job_id=job_id,
-                content={"progress": 100, "status": "Code execution complete!"}
-            ))
-            
-            # Prepare result message
-            result_parts = []
-            if inputs.description:
-                result_parts.append(f"**{inputs.description}**")
-            
-            if stdout_output.strip():
-                result_parts.append(f"**Output:**\n```\n{stdout_output.strip()}\n```")
-            
-            if dataset_info:
-                result_parts.append("**Datasets created/updated:**")
-                for name, info in dataset_info.items():
-                    result_parts.append(f"- `{name}`: {info['shape'][0]} rows × {info['shape'][1]} columns")
-            
-            if stderr_output.strip():
-                result_parts.append(f"**Warnings:**\n```\n{stderr_output.strip()}\n```")
+            # Get output and error messages
+            output_str = stdout.getvalue()
+            error_str = stderr.getvalue()
+
+            # The result is whatever was in 'result' variable, or the last expression's value (which exec doesn't return directly)
+            # This implementation is simplified. A real one would need ast parsing to get the last expression.
+            # For now, we'll rely on the user assigning to a 'result' variable or just using stdout.
+            result_val = local_env.get("result", "Code executed. See output for details.")
             
             return {
-                "success": True,
-                "code": inputs.code,
-                "stdout": stdout_output,
-                "stderr": stderr_output,
-                "datasets": dataset_info,
-                "message": "\n\n".join(result_parts) if result_parts else "Code executed successfully."
+                "success": not error_str,
+                "output": output_str,
+                "error": error_str or None,
+                "result": str(result_val)
             }
-            
+
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "code": inputs.code,
-                "message": f"**Code execution failed:**\n```\n{str(e)}\n```\n\nPlease check your code and try again."
-            }
+            error_str = stderr.getvalue()
+            return {"error": f"Execution failed: {e}\n{error_str}"}

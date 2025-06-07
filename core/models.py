@@ -10,6 +10,7 @@ class MessageType(str, Enum):
     RESULT = "result"
     ERROR = "error"
     LOG = "log"
+    JOB_STATUS = "job_status"
 
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -50,7 +51,7 @@ class Job(BaseModel):
 
 class ToolInput(BaseModel):
     """Base class for tool inputs"""
-    pass
+    model_config = {'arbitrary_types_allowed': True}
 
 class CorrelationInput(ToolInput):
     n_points: int = Field(default=1000, ge=10, le=100000)

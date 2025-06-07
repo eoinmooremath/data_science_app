@@ -27,6 +27,12 @@ app = create_app(server=server)
 application = app.server
 
 if __name__ == "__main__":
+    # Start the LLM client's background thread now that the app is configured
+    app.llm_client.start()
+    
+    # Print the URL for easy access
+    print(f"🚀 Application starting on http://{AppConfig.host}:{AppConfig.port}")
+    
     # Development mode
     app.run(
         debug=AppConfig.debug,

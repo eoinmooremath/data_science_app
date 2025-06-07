@@ -1,5 +1,5 @@
 # ui/callbacks/__init__.py
-from dash import Dash
+from dash import Dash, Input, Output, State, no_update
 from core.message_bus import MessageBus
 from core.job_manager import JobManager
 from llm.client import LLMClient
@@ -7,6 +7,7 @@ from ui.state import UIStateManager
 from typing import List, Optional, Dict, Any
 from core.models import MessageType
 from tools.base import BaseTool
+import logging
 
 from .chat_callbacks import register_chat_callbacks
 from .progress_callbacks import register_progress_callbacks
@@ -24,78 +25,50 @@ def register_all_callbacks(
 ):
     """Register all application callbacks"""
     
-    # Register UI callbacks first (this creates the plot_history)
     register_chat_callbacks(app, llm_client, ui_state)
     register_progress_callbacks(app, ui_state)
     register_plot_callbacks(app, ui_state)
     register_file_callbacks(app)
     register_results_callbacks(app, ui_state)
     
-    # Register message bus subscriptions after callbacks (so app.plot_history exists)
-    register_message_subscriptions(app, message_bus, ui_state, job_manager, tools, llm_client)
+    # This is the new central callback for processing messages from the bus
+    @app.callback(
+        Output("message-trigger", "data"), # Dummy output to trigger the callback
+        Input("update-interval", "n_intervals"),
+        prevent_initial_call=True
+    )
+    def process_message_queue(n_intervals):
+        messages = message_bus.get_all_messages()
+        if not messages:
+            return no_update
 
-# ui/callbacks/__init__.py - Enhanced message handling
-def register_message_subscriptions(app: Dash, message_bus: MessageBus, ui_state: UIStateManager, job_manager: JobManager, tools: List[BaseTool], llm_client: Optional[LLMClient] = None):
-    """Register message bus subscriptions"""
-    
-    # Create tool lookup
-    tool_lookup = {tool.name: tool for tool in tools}
-    # Add namespace lookup for enhanced tools
-    for tool in tools:
-        if hasattr(tool, 'namespace'):
-            tool_lookup[tool.namespace] = tool
+        tool_lookup = {tool.name: tool for tool in tools}
 
-    def handle_progress(msg):
-        ui_state.update_job_progress(msg.job_id, msg.data["progress"], msg.data["message"])
-    
-    def handle_plot(msg):
-        ui_state.update_job_plot(msg.job_id, msg.data)
-        # Use the app's plot history instead of module-level
-        if hasattr(app, 'plot_history'):
-            app.plot_history.add_plot(msg.data, msg.job_id)  # Fixed parameter order
-        else:
-            print("⚠️ Warning: app.plot_history not found")
-    
-    def handle_result(msg):
-        ui_state.update_job_result(msg.job_id, msg.data)
-        job = job_manager.get_job(msg.job_id)
-        if job:
-            ui_state.add_result(msg.job_id, job.tool_name, msg.data)
-            
-            # Get the tool instance
-            tool = tool_lookup.get(job.tool_name)
-            
-            # Add result summary to chat with tool reference
-            result_summary = format_result_summary(job.tool_name, msg.data, tool)
-            ui_state.add_chat_message(
-                "assistant",
-                result_summary,
-                msg.job_id
-            )
-            
-            # For suggest_tool, trigger a follow-up LLM response
-            if job.tool_name == "suggest_tool" and llm_client:
-                # Extract suggestions from the FlexibleToolOutput format
-                suggestions = msg.data.get('suggestions', [])  # Now properly in 'suggestions' field
-                if suggestions:
-                    # Create a conversational follow-up message
-                    # suggestions is now a list of dicts with 'tool' and 'reason' keys
-                    suggestion_text = "\n".join([f"• **{s['tool']}** - {s['reason']}" for s in suggestions])
+        for msg in messages:
+            try:
+                if msg.type == MessageType.PROGRESS:
+                    logging.info(f"UI handling PROGRESS: {msg.job_id} - {msg.data['progress']}%")
+                    ui_state.update_job_progress(msg.job_id, msg.data["progress"], msg.data["message"])
+                
+                elif msg.type == MessageType.RESULT:
+                    logging.info(f"UI handling RESULT for job: {msg.job_id}")
+                    ui_state.update_job_progress(msg.job_id, 100, "Completed")
                     
-                    follow_up_message = f"""Perfect! Based on your request, here are my top recommendations:
+                    job = job_manager.get_job(msg.job_id)
+                    if job:
+                        # Silently add the result to the ledger without creating a chat message
+                        ui_state.add_result(msg.job_id, job.tool_name, msg.data)
+                
+                elif msg.type == MessageType.ERROR:
+                     logging.error(f"UI handling ERROR for job: {msg.job_id} - {msg.data.get('error')}")
+                     ui_state.update_job_progress(msg.job_id, 100, f"Failed: {msg.data.get('error')}")
 
-{suggestion_text}
+            except Exception as e:
+                logging.error(f"Error processing message in UI callback: {e}", exc_info=True)
+        
+        # Return a value to indicate the trigger has fired
+        return n_intervals
 
-Which of these would you like to start with? I can run any of these analyses for you right now. Just let me know which one interests you most, or if you'd like me to explain any of them in more detail!"""
-                    
-                    # Add the follow-up message directly
-                    ui_state.add_chat_message("assistant", follow_up_message)
-    
-    message_bus.subscribe(MessageType.PROGRESS, handle_progress)
-    message_bus.subscribe(MessageType.PLOT, handle_plot)
-    message_bus.subscribe(MessageType.RESULT, handle_result)
-
-# ui/callbacks/__init__.py - Update the result handler
 def format_result_summary(tool_name: str, results: Dict[str, Any], tool: Optional[BaseTool] = None) -> str:
     """Format results for chat display"""
     
@@ -133,4 +106,4 @@ Here are some analyses I can help with:
 What would you like to explore first?"""
     
     # Generic format for other tools
-    return f"✅ Analysis complete! Check the results panel for details."
+    return f"✅ Analysis '{tool_name}' complete! Check the results panel for details."
